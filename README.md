@@ -8,50 +8,7 @@ This project demonstrates a secure, production-grade system for API key manageme
 
 ## Architecture & Encryption Flow
 
-> **Note:** The following diagram is rendered automatically on GitHub and in any Markdown viewer that supports Mermaid.
-
-```mermaid
-flowchart TD
-    subgraph User
-        A[Client]
-    end
-    subgraph Backend
-        B[Backend Service]
-    end
-    subgraph KMS
-        C[KMS Service]
-    end
-    subgraph Vault
-        D[HashiCorp Vault]
-    end
-    subgraph DB
-        E[PostgreSQL]
-    end
-    subgraph Redis
-        F[Redis (optional)]
-    end
-
-    %% Registration/API Key Flow
-    A -- "Register Project/Request API Key" --> B
-    B -- "Generate API Key, Store in DB/Redis" --> E
-    B -- "Request KEK for Project" --> C
-    C -- "Generate KEK, Store in Vault" --> D
-    C -- "ACK" --> B
-    B -- "Return API Key" --> A
-
-    %% Invoice Encryption Flow
-    A -- "Create Invoice (plaintext)" --> B
-    B -- "Fetch KEK from Vault" --> D
-    B -- "Generate DEK, Encrypt Data, Encrypt DEK with KEK" --> B
-    B -- "Store EDEK + Encrypted Data" --> E
-
-    %% Invoice Decryption Flow
-    A -- "Fetch Invoice" --> B
-    B -- "Fetch EDEK + Encrypted Data" --> E
-    B -- "Fetch KEK from Vault" --> D
-    B -- "Decrypt EDEK with KEK, Decrypt Data with DEK" --> B
-    B -- "Return Plaintext Invoice" --> A
-```
+![System Architecture Diagram](./diagram.png)
 
 ---
 
