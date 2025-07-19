@@ -1,15 +1,9 @@
 package internal
 
 import (
-	"context"
-	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"io/ioutil"
 	"net/http"
-	"os"
-
-	vaultapi "github.com/hashicorp/vault/api"
 )
 
 type InvoiceRequest struct {
@@ -36,14 +30,11 @@ type InvoiceFetchResponse struct {
 // Handler to create encrypted invoice
 func CreateInvoiceHandler(db *InvoiceDB, mainDB *DB, cache *Cache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// 1. Get API key from header
 		apiKey := r.Header.Get("X-API-Key")
 		if apiKey == "" {
 			http.Error(w, "Missing API key", http.StatusUnauthorized)
 			return
 		}
-
-		// 2. Validate API key (cache, then DB)
 		var project string
 		var err error
 		if cache != nil {
@@ -56,8 +47,6 @@ func CreateInvoiceHandler(db *InvoiceDB, mainDB *DB, cache *Cache) http.HandlerF
 				return
 			}
 		}
-
-		// 3. Parse request and check project match
 		var req InvoiceRequest
 		body, _ := ioutil.ReadAll(r.Body)
 		if err := json.Unmarshal(body, &req); err != nil {
@@ -68,21 +57,25 @@ func CreateInvoiceHandler(db *InvoiceDB, mainDB *DB, cache *Cache) http.HandlerF
 			http.Error(w, "API key does not match project", http.StatusUnauthorized)
 			return
 		}
-
-		// 4. Now fetch KEK, encrypt, and save
-		kek, keyVersion, err := FetchKEKFromVault(r.Context(), req.Project)
+		// Generate DEK, encrypt data
+		dek, err := GenerateDEK()
 		if err != nil {
-			http.Error(w, "Failed to fetch KEK", http.StatusInternalServerError)
+			http.Error(w, "Failed to generate DEK", http.StatusInternalServerError)
 			return
 		}
-		defer ZeroBytes(kek)
-		// Envelope encrypt
-		encryptedData, edek, dekNonce, dataNonce, err := EnvelopeEncrypt([]byte(req.Data), kek)
+		encryptedData, dataNonce, err := EncryptWithAESGCM(dek, []byte(req.Data))
 		if err != nil {
 			http.Error(w, "Encryption failed", http.StatusInternalServerError)
 			return
 		}
-		if err := db.InsertInvoice(req.Project, req.InvoiceID, edek, encryptedData, dekNonce, dataNonce, keyVersion); err != nil {
+		// Wrap DEK with Vault Transit
+		edek, err := VaultTransitEncryptDEK(req.Project, dek)
+		if err != nil {
+			http.Error(w, "Failed to wrap DEK", http.StatusInternalServerError)
+			return
+		}
+		// Store encryptedData, edek, dataNonce
+		if err := db.InsertInvoice(req.Project, req.InvoiceID, []byte(edek), encryptedData, nil, dataNonce, "v1"); err != nil {
 			http.Error(w, "DB insert failed", http.StatusInternalServerError)
 			return
 		}
@@ -93,14 +86,11 @@ func CreateInvoiceHandler(db *InvoiceDB, mainDB *DB, cache *Cache) http.HandlerF
 // Handler to fetch and decrypt invoice
 func FetchInvoiceHandler(db *InvoiceDB, mainDB *DB, cache *Cache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// 1. Get API key from header
 		apiKey := r.Header.Get("X-API-Key")
 		if apiKey == "" {
 			http.Error(w, "Missing API key", http.StatusUnauthorized)
 			return
 		}
-
-		// 2. Validate API key (cache, then DB)
 		var project string
 		var err error
 		if cache != nil {
@@ -113,8 +103,6 @@ func FetchInvoiceHandler(db *InvoiceDB, mainDB *DB, cache *Cache) http.HandlerFu
 				return
 			}
 		}
-
-		// 3. Parse request and check project match
 		var req InvoiceFetchRequest
 		body, _ := ioutil.ReadAll(r.Body)
 		if err := json.Unmarshal(body, &req); err != nil {
@@ -125,62 +113,22 @@ func FetchInvoiceHandler(db *InvoiceDB, mainDB *DB, cache *Cache) http.HandlerFu
 			http.Error(w, "API key does not match project", http.StatusUnauthorized)
 			return
 		}
-
-		// 4. Fetch KEK for the project
-		kek, _, err := FetchKEKFromVault(r.Context(), req.Project)
-		if err != nil {
-			http.Error(w, "Failed to fetch KEK", http.StatusInternalServerError)
-			return
-		}
-		defer ZeroBytes(kek)
-
-		// 5. Retrieve invoice record
 		rec, err := db.GetInvoice(req.Project, req.InvoiceID)
 		if err != nil {
 			http.Error(w, "Invoice not found", http.StatusNotFound)
 			return
 		}
-
-		// 6. Decrypt EDEK to get DEK, then decrypt data
-		plain, err := EnvelopeDecrypt(rec.Encrypted, rec.EDEK, kek, rec.DEKNonce, rec.DataNonce)
+		// Unwrap DEK with Vault Transit
+		dek, err := VaultTransitDecryptDEK(req.Project, string(rec.EDEK))
+		if err != nil {
+			http.Error(w, "Failed to unwrap DEK", http.StatusInternalServerError)
+			return
+		}
+		plain, err := DecryptWithAESGCM(dek, rec.Encrypted, rec.DataNonce)
 		if err != nil {
 			http.Error(w, "Decryption failed", http.StatusInternalServerError)
 			return
 		}
 		json.NewEncoder(w).Encode(InvoiceFetchResponse{InvoiceID: req.InvoiceID, Data: string(plain)})
-	}
-}
-
-// FetchKEKFromVault fetches the KEK and key version for a project from Vault
-func FetchKEKFromVault(ctx context.Context, project string) (kek []byte, keyVersion string, err error) {
-	vaultAddr := os.Getenv("VAULT_ADDR")
-	vaultToken := os.Getenv("VAULT_TOKEN")
-	config := vaultapi.DefaultConfig()
-	config.Address = vaultAddr
-	client, err := vaultapi.NewClient(config)
-	if err != nil {
-		return nil, "", err
-	}
-	client.SetToken(vaultToken)
-	secret, err := client.KVv2("secret").Get(ctx, project)
-	if err != nil {
-		return nil, "", err
-	}
-	kekStr, ok := secret.Data["kek"].(string)
-	if !ok {
-		return nil, "", errors.New("KEK not found in Vault")
-	}
-	kek, err = base64.StdEncoding.DecodeString(kekStr)
-	if err != nil {
-		return nil, "", err
-	}
-	keyVersion = "v1"
-	return kek, keyVersion, nil
-}
-
-// ZeroBytes securely zeroes a byte slice
-func ZeroBytes(b []byte) {
-	for i := range b {
-		b[i] = 0
 	}
 }

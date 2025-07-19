@@ -1,9 +1,11 @@
 package internal
 
 import (
+	"bytes"
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/google/uuid"
 )
@@ -35,9 +37,20 @@ func RegisterHandler(db *DB, cache *Cache) http.HandlerFunc {
 		if cache != nil {
 			cache.Client.Set(r.Context(), apiKey, req.Project, 0)
 		}
-		if status, err := CallKMSForKEK(req.Project); err != nil || status != "ACK" {
-			log.Printf("KMS error or NACK: %v, status: %s", err, status)
-			// Continue, as per requirements
+		// Create Transit key for project
+		vaultAddr := os.Getenv("VAULT_ADDR")
+		vaultToken := os.Getenv("VAULT_TOKEN")
+		url := vaultAddr + "/v1/transit/keys/" + req.Project + "-kek"
+		payload := map[string]interface{}{"type": "aes256-gcm96"}
+		body, _ := json.Marshal(payload)
+		reqVault, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
+		reqVault.Header.Set("X-Vault-Token", vaultToken)
+		reqVault.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(reqVault)
+		if err != nil || (resp.StatusCode != 200 && resp.StatusCode != 204) {
+			log.Printf("Vault Transit key creation failed: %v", err)
+			http.Error(w, "Failed to create project key in Vault", http.StatusInternalServerError)
+			return
 		}
 		json.NewEncoder(w).Encode(RegisterResponse{APIKey: apiKey})
 	}

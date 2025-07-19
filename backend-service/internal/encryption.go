@@ -1,10 +1,15 @@
 package internal
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"io"
+	"net/http"
+	"os"
 )
 
 // GenerateDEK generates a new random 256-bit DEK.
@@ -15,22 +20,21 @@ func GenerateDEK() ([]byte, error) {
 }
 
 // EncryptWithAESGCM encrypts plaintext with the given key using AES-GCM.
-func EncryptWithAESGCM(key, plaintext []byte) (ciphertext, nonce, tag []byte, err error) {
+func EncryptWithAESGCM(key, plaintext []byte) (ciphertext, nonce []byte, err error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	nonce = make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	ct := gcm.Seal(nil, nonce, plaintext, nil)
-	// AES-GCM appends the tag to the ciphertext
-	return ct, nonce, nil, nil
+	ciphertext = gcm.Seal(nil, nonce, plaintext, nil)
+	return ciphertext, nonce, nil
 }
 
 // DecryptWithAESGCM decrypts ciphertext with the given key and nonce using AES-GCM.
@@ -43,43 +47,52 @@ func DecryptWithAESGCM(key, ciphertext, nonce []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	pt, err := gcm.Open(nil, nonce, ciphertext, nil)
-	return pt, err
+	return gcm.Open(nil, nonce, ciphertext, nil)
 }
 
-// EnvelopeEncrypt encrypts data with a DEK, then encrypts the DEK with the KEK (from Vault).
-func EnvelopeEncrypt(plainData, kek []byte) (encryptedData, edek, dekNonce, dataNonce []byte, err error) {
-	dek, err := GenerateDEK()
+// Vault Transit API helpers
+func VaultTransitEncryptDEK(project string, dek []byte) (edek string, err error) {
+	vaultAddr := os.Getenv("VAULT_ADDR")
+	vaultToken := os.Getenv("VAULT_TOKEN")
+	url := vaultAddr + "/v1/transit/encrypt/" + project + "-kek"
+	payload := map[string]string{"plaintext": base64.StdEncoding.EncodeToString(dek)}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
+	req.Header.Set("X-Vault-Token", vaultToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return "", err
 	}
-	// Encrypt the data with the DEK
-	encryptedData, dataNonce, _, err = EncryptWithAESGCM(dek, plainData)
-	if err != nil {
-		return nil, nil, nil, nil, err
+	defer resp.Body.Close()
+	var respData struct {
+		Ciphertext string `json:"ciphertext"`
 	}
-	// Encrypt the DEK with the KEK (envelope)
-	edek, dekNonce, _, err = EncryptWithAESGCM(kek, dek)
-	if err != nil {
-		return nil, nil, nil, nil, err
+	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+		return "", err
 	}
-	// Zero DEK from memory
-	for i := range dek {
-		dek[i] = 0
-	}
-	return encryptedData, edek, dekNonce, dataNonce, nil
+	return respData.Ciphertext, nil
 }
 
-// EnvelopeDecrypt decrypts EDEK with KEK to get DEK, then decrypts data with DEK.
-func EnvelopeDecrypt(encryptedData, edek, kek, dekNonce, dataNonce []byte) ([]byte, error) {
-	dek, err := DecryptWithAESGCM(kek, edek, dekNonce)
+func VaultTransitDecryptDEK(project string, edek string) ([]byte, error) {
+	vaultAddr := os.Getenv("VAULT_ADDR")
+	vaultToken := os.Getenv("VAULT_TOKEN")
+	url := vaultAddr + "/v1/transit/decrypt/" + project + "-kek"
+	payload := map[string]string{"ciphertext": edek}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
+	req.Header.Set("X-Vault-Token", vaultToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
-	plainData, err := DecryptWithAESGCM(dek, encryptedData, dataNonce)
-	// Zero DEK from memory
-	for i := range dek {
-		dek[i] = 0
+	defer resp.Body.Close()
+	var respData struct {
+		Plaintext string `json:"plaintext"`
 	}
-	return plainData, err
+	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+		return nil, err
+	}
+	return base64.StdEncoding.DecodeString(respData.Plaintext)
 }
