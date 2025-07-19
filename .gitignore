@@ -1,0 +1,6 @@
+   .env
+   */.env
+   backend-service/.env
+   kms-service/.env
+   vault/file/
+   vault/*.hcl
