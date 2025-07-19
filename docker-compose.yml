@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  vault:
+    image: hashicorp/vault:1.15.4
+    container_name: hashicorpvault-vault-1
+    ports:
+      - "8200:8200"
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      - /home/sharique/Downloads/vaultdata/config.hcl:/vault/config/config.hcl
+      - /home/sharique/Downloads/vaultdata/file:/vault/file
+    environment:
+      VAULT_LOCAL_CONFIG: '{}'
+    command: "vault server -config=/vault/config/config.hcl"
+
+  postgres:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_USER: backend_user
+      POSTGRES_PASSWORD: backend_pass
+      POSTGRES_DB: backend_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    restart: always
+    ports:
+      - "6379:6379"
+
+  backend-service:
+    build:
+      context: ./backend-service
+    env_file:
+      - ./backend-service/.env
+    depends_on:
+      - postgres
+      - redis
+      - kms-service
+      - vault
+    ports:
+      - "8080:8080"
+    restart: always
+
+  kms-service:
+    build:
+      context: ./kms-service
+    env_file:
+      - ./kms-service/.env
+    depends_on:
+      - vault
+    ports:
+      - "8081:8081"
+    restart: always
+
+volumes:
+  pgdata:
+  vault_data:
