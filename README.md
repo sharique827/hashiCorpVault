@@ -8,7 +8,36 @@ This project demonstrates a secure, production-grade system for API key manageme
 
 ## Architecture & Encryption Flow
 
-![System Architecture Diagram](./diagram.png)
+<!-- ![System Architecture Diagram](./diagram.png) -->
+flowchart TD
+    %% Actors and Services
+    A[Client]
+    B[Backend Service]
+    C[KMS Service]
+    D[HashiCorp Vault]
+    E[PostgreSQL]
+    F[Redis (optional)]
+
+    %% Registration/API Key Flow
+    A -- "Register Project/Request API Key" --> B
+    B -- "Generate API Key, Store in DB/Redis" --> E
+    B -- "Request KEK for Project" --> C
+    C -- "Generate KEK, Store in Vault" --> D
+    C -- "ACK" --> B
+    B -- "Return API Key" --> A
+
+    %% Invoice Encryption Flow
+    A -- "Create Invoice (plaintext)" --> B
+    B -- "Fetch KEK from Vault" --> D
+    B -- "Generate DEK, Encrypt Data, Encrypt DEK with KEK" --> B
+    B -- "Store EDEK + Encrypted Data" --> E
+
+    %% Invoice Decryption Flow
+    A -- "Fetch Invoice" --> B
+    B -- "Fetch EDEK + Encrypted Data" --> E
+    B -- "Fetch KEK from Vault" --> D
+    B -- "Decrypt EDEK with KEK, Decrypt Data with DEK" --> B
+    B -- "Return Plaintext Invoice" --> A
 
 ---
 
