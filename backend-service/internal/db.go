@@ -34,3 +34,14 @@ func (db *DB) InsertRequest(name, project, team, email, apiKey string) error {
 	)
 	return err
 }
+
+func (db *DB) GetProjectByAPIKey(apiKey string) (string, error) {
+	row := db.Pool.QueryRow(context.Background(),
+		`SELECT project FROM api_requests WHERE api_key=$1`, apiKey,
+	)
+	var project string
+	if err := row.Scan(&project); err != nil {
+		return "", err
+	}
+	return project, nil
+}

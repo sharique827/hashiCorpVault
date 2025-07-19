@@ -34,15 +34,42 @@ type InvoiceFetchResponse struct {
 }
 
 // Handler to create encrypted invoice
-func CreateInvoiceHandler(db *InvoiceDB) http.HandlerFunc {
+func CreateInvoiceHandler(db *InvoiceDB, mainDB *DB, cache *Cache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// 1. Get API key from header
+		apiKey := r.Header.Get("X-API-Key")
+		if apiKey == "" {
+			http.Error(w, "Missing API key", http.StatusUnauthorized)
+			return
+		}
+
+		// 2. Validate API key (cache, then DB)
+		var project string
+		var err error
+		if cache != nil {
+			project, _ = cache.Client.Get(r.Context(), apiKey).Result()
+		}
+		if project == "" && mainDB != nil {
+			project, err = mainDB.GetProjectByAPIKey(apiKey)
+			if err != nil || project == "" {
+				http.Error(w, "Invalid API key", http.StatusUnauthorized)
+				return
+			}
+		}
+
+		// 3. Parse request and check project match
 		var req InvoiceRequest
 		body, _ := ioutil.ReadAll(r.Body)
 		if err := json.Unmarshal(body, &req); err != nil {
 			http.Error(w, "Invalid request", http.StatusBadRequest)
 			return
 		}
-		// Fetch KEK from Vault
+		if req.Project != project {
+			http.Error(w, "API key does not match project", http.StatusUnauthorized)
+			return
+		}
+
+		// 4. Now fetch KEK, encrypt, and save
 		kek, keyVersion, err := FetchKEKFromVault(r.Context(), req.Project)
 		if err != nil {
 			http.Error(w, "Failed to fetch KEK", http.StatusInternalServerError)
@@ -64,26 +91,57 @@ func CreateInvoiceHandler(db *InvoiceDB) http.HandlerFunc {
 }
 
 // Handler to fetch and decrypt invoice
-func FetchInvoiceHandler(db *InvoiceDB) http.HandlerFunc {
+func FetchInvoiceHandler(db *InvoiceDB, mainDB *DB, cache *Cache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// 1. Get API key from header
+		apiKey := r.Header.Get("X-API-Key")
+		if apiKey == "" {
+			http.Error(w, "Missing API key", http.StatusUnauthorized)
+			return
+		}
+
+		// 2. Validate API key (cache, then DB)
+		var project string
+		var err error
+		if cache != nil {
+			project, _ = cache.Client.Get(r.Context(), apiKey).Result()
+		}
+		if project == "" && mainDB != nil {
+			project, err = mainDB.GetProjectByAPIKey(apiKey)
+			if err != nil || project == "" {
+				http.Error(w, "Invalid API key", http.StatusUnauthorized)
+				return
+			}
+		}
+
+		// 3. Parse request and check project match
 		var req InvoiceFetchRequest
 		body, _ := ioutil.ReadAll(r.Body)
 		if err := json.Unmarshal(body, &req); err != nil {
 			http.Error(w, "Invalid request", http.StatusBadRequest)
 			return
 		}
-		rec, err := db.GetInvoice(req.Project, req.InvoiceID)
-		if err != nil {
-			http.Error(w, "Invoice not found", http.StatusNotFound)
+		if req.Project != project {
+			http.Error(w, "API key does not match project", http.StatusUnauthorized)
 			return
 		}
-		// Fetch KEK from Vault
+
+		// 4. Fetch KEK for the project
 		kek, _, err := FetchKEKFromVault(r.Context(), req.Project)
 		if err != nil {
 			http.Error(w, "Failed to fetch KEK", http.StatusInternalServerError)
 			return
 		}
 		defer ZeroBytes(kek)
+
+		// 5. Retrieve invoice record
+		rec, err := db.GetInvoice(req.Project, req.InvoiceID)
+		if err != nil {
+			http.Error(w, "Invoice not found", http.StatusNotFound)
+			return
+		}
+
+		// 6. Decrypt EDEK to get DEK, then decrypt data
 		plain, err := EnvelopeDecrypt(rec.Encrypted, rec.EDEK, kek, rec.DEKNonce, rec.DataNonce)
 		if err != nil {
 			http.Error(w, "Decryption failed", http.StatusInternalServerError)

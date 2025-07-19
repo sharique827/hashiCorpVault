@@ -30,8 +30,8 @@ func main() {
 
 	r := mux.NewRouter()
 	r.HandleFunc("/register", internal.RegisterHandler(db, cache)).Methods("POST")
-	r.HandleFunc("/invoice/create", internal.CreateInvoiceHandler(invoiceDB)).Methods("POST")
-	r.HandleFunc("/invoice/fetch", internal.FetchInvoiceHandler(invoiceDB)).Methods("POST")
+	r.HandleFunc("/invoice/create", internal.CreateInvoiceHandler(invoiceDB, db, cache)).Methods("POST")
+	r.HandleFunc("/invoice/fetch", internal.FetchInvoiceHandler(invoiceDB, db, cache)).Methods("POST")
 
 	port := os.Getenv("PORT")
 	if port == "" {

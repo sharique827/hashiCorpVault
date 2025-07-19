@@ -35,8 +35,8 @@ func RegisterHandler(db *DB, cache *Cache) http.HandlerFunc {
 		if cache != nil {
 			cache.Client.Set(r.Context(), apiKey, req.Project, 0)
 		}
-		if err := CallKMSForKEK(req.Project); err != nil {
-			log.Printf("KMS error: %v", err)
+		if status, err := CallKMSForKEK(req.Project); err != nil || status != "ACK" {
+			log.Printf("KMS error or NACK: %v, status: %s", err, status)
 			// Continue, as per requirements
 		}
 		json.NewEncoder(w).Encode(RegisterResponse{APIKey: apiKey})

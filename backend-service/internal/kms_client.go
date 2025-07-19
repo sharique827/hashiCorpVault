@@ -11,16 +11,26 @@ type KMSRequest struct {
 	Project string `json:"project"`
 }
 
-func CallKMSForKEK(project string) error {
+type KMSResponse struct {
+	Status string `json:"status"`
+}
+
+func CallKMSForKEK(project string) (string, error) {
 	url := os.Getenv("KMS_URL") + "/generate-kek"
 	body, _ := json.Marshal(KMSRequest{Project: project})
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
 	if err != nil {
-		return err
+		return "NACK", err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil // Only need ACK, ignore errors for now
+
+	var kmsResp KMSResponse
+	if err := json.NewDecoder(resp.Body).Decode(&kmsResp); err != nil {
+		return "NACK", err
 	}
-	return nil
+
+	if kmsResp.Status == "ACK" {
+		return "ACK", nil
+	}
+	return "NACK", nil
 }
