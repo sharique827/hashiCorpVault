@@ -1,26 +1,19 @@
 package main
 
 import (
+	"kms-service/internal"
 	"log"
 	"net/http"
 	"os"
+
 	"github.com/gorilla/mux"
-	"github.com/joho/godotenv"
-	"kms-service/internal"
 )
 
 func main() {
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, relying on environment variables")
-	}
-
-	vaultClient, err := internal.InitVault()
-	if err != nil {
-		log.Fatalf("Failed to connect to Vault: %v", err)
-	}
-
 	r := mux.NewRouter()
-	r.HandleFunc("/generate-kek", internal.GenerateKEKHandler(vaultClient)).Methods("POST")
+	r.HandleFunc("/create-key", internal.CreateKeyHandler()).Methods("POST")
+	r.HandleFunc("/wrap-dek", internal.WrapDEKHandler()).Methods("POST")
+	r.HandleFunc("/unwrap-dek", internal.UnwrapDEKHandler()).Methods("POST")
 
 	port := os.Getenv("PORT")
 	if port == "" {

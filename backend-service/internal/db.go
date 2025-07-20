@@ -45,3 +45,15 @@ func (db *DB) GetProjectByAPIKey(apiKey string) (string, error) {
 	}
 	return project, nil
 }
+
+// GetAPIKeyByProject returns the API key for a given project, or an empty string if not found
+func (db *DB) GetAPIKeyByProject(project string) (string, error) {
+	var apiKey string
+	err := db.Pool.QueryRow(context.Background(),
+		`SELECT api_key FROM api_requests WHERE project=$1 LIMIT 1`, project,
+	).Scan(&apiKey)
+	if err != nil {
+		return "", err
+	}
+	return apiKey, nil
+}

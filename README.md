@@ -1,54 +1,60 @@
-# HashiCorp Vault Envelope Encryption System
+# HashiCorp Vault Envelope Encryption System (Vault Transit Edition)
 
 ## Overview
 
-This project demonstrates a secure, production-grade system for API key management and real-time encryption/decryption of sensitive invoice/transaction data using envelope encryption (KEK/DEK) with HashiCorp Vault, Go microservices, PostgreSQL, and Docker Compose.
+This project uses HashiCorp Vault's Transit Secrets Engine for maximum security. All cryptographic operations (wrapping/unwrapping DEKs) are performed by Vault. The KEK never leaves Vault memory.
 
 ---
 
 ## Architecture & Encryption Flow
 
-<!-- ![System Architecture Diagram](./diagram.png) -->
+```mermaid
 flowchart TD
-    %% Actors and Services
-    A[Client]
-    B[Backend Service]
-    C[KMS Service]
-    D[HashiCorp Vault]
-    E[PostgreSQL]
-    F[Redis (optional)]
+    A["Client"]
+    B["Backend Service"]
+    D["HashiCorp Vault (Transit)"]
+    E["PostgreSQL"]
+    F["Redis (optional)"]
 
-    %% Registration/API Key Flow
     A -- "Register Project/Request API Key" --> B
     B -- "Generate API Key, Store in DB/Redis" --> E
-    B -- "Request KEK for Project" --> C
-    C -- "Generate KEK, Store in Vault" --> D
-    C -- "ACK" --> B
+    B -- "Create Transit Key for Project" --> D
     B -- "Return API Key" --> A
 
-    %% Invoice Encryption Flow
     A -- "Create Invoice (plaintext)" --> B
-    B -- "Fetch KEK from Vault" --> D
-    B -- "Generate DEK, Encrypt Data, Encrypt DEK with KEK" --> B
+    B -- "Generate DEK, Encrypt Data" --> B
+    B -- "Request EDEK: Send DEK to Vault Transit /encrypt" --> D
+    D -- "Return EDEK to Backend" --> B
     B -- "Store EDEK + Encrypted Data" --> E
 
-    %% Invoice Decryption Flow
     A -- "Fetch Invoice" --> B
     B -- "Fetch EDEK + Encrypted Data" --> E
-    B -- "Fetch KEK from Vault" --> D
-    B -- "Decrypt EDEK with KEK, Decrypt Data with DEK" --> B
+    B -- "Request DEK: Send EDEK to Vault Transit /decrypt" --> D
+    D -- "Return DEK to Backend" --> B
+    B -- "Decrypt Data with DEK" --> B
     B -- "Return Plaintext Invoice" --> A
+```
 
 ---
 
-## Encryption/Decryption Flow
+## Registration (Project/KEK Creation)
+- Backend calls:
+  - `POST /v1/transit/keys/<project>-kek` (type: aes256-gcm96)
+- Vault creates and manages the KEK internally.
 
-- **KEK (Key Encryption Key):** Unique per project, stored in Vault.
-- **DEK (Data Encryption Key):** Randomly generated per invoice/transaction.
-- **EDEK:** DEK encrypted with KEK (envelope encryption).
-- **Encrypted Data:** Invoice data encrypted with DEK (AES-GCM).
-- **Postgres:** Stores EDEK, encrypted data, nonces, and key version.
-- **Vault:** Used to fetch KEK for encryption/decryption.
+## Invoice Creation (Envelope Encryption)
+- Backend generates DEK, encrypts invoice data.
+- Backend calls:
+  - `POST /v1/transit/encrypt/<project>-kek` with `{ "plaintext": "<base64 DEK>" }`
+- Vault returns `{ "ciphertext": "vault:v1:..." }` (EDEK).
+- Backend stores encrypted data + EDEK in Postgres.
+
+## Invoice Fetch (Envelope Decryption)
+- Backend fetches encrypted data + EDEK from Postgres.
+- Backend calls:
+  - `POST /v1/transit/decrypt/<project>-kek` with `{ "ciphertext": "<EDEK>" }`
+- Vault returns `{ "plaintext": "<base64 DEK>" }`.
+- Backend decrypts invoice data with the DEK.
 
 ---
 
@@ -229,7 +235,8 @@ Content-Type: application/json
 
 ## Security Best Practices
 
-- **KEKs are never stored or logged in plaintext.**
+- **KEKs are never exposed to or handled by the backend.**
+- **All KEK operations (wrap/unwrap) are performed inside KMS/Vault.**
 - **DEKs are zeroed from memory after use.**
 - **All encryption uses AES-GCM (authenticated encryption).**
 - **Key versioning is supported for future rotation.**
@@ -256,3 +263,17 @@ MIT
 ## Authors
 
 <!-- - [Your Name](https://github.com/yourusername) -->
+
+
+
+
+
+
+
+Unseal Key 1: m6qvzkv6NZinNL+0YiAX21Wm+8TFieEnGScJaNz1i/l8
+Unseal Key 2: Nsms2KTNhBUp60Ku19wCW17/+Kgf3ASCa/9HrKwNpXOH
+Unseal Key 3: 5h8MWHWMYLb7wN+bd4rwOXqnute1QNcFof8R6UpuP7qR
+Unseal Key 4: JENK815hvM+EuQpFhKYroKGY66J0jHy34N6aUP/rWDxT
+Unseal Key 5: VoSz0byh3fG0GlmgkAMJRoqCC7yR0GwdImrUdk+603Tt
+
+Initial Root Token: hvs.XwRxwTOyRcz8apJP6HSAUjKa

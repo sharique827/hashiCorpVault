@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -19,7 +20,7 @@ type InvoiceRecord struct {
 	KeyVersion string
 	DEKNonce   []byte
 	DataNonce  []byte
-	CreatedAt  string
+	CreatedAt  time.Time
 }
 
 func (db *InvoiceDB) InsertInvoice(project, invoiceID string, edek, encrypted, dekNonce, dataNonce []byte, keyVersion string) error {

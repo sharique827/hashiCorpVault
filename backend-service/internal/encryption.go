@@ -85,7 +85,7 @@ func KMSWrapDEK(project string, dek []byte) (string, error) {
 	return respData.EDEK, nil
 }
 
-func KMSUnwrapDEK(project string, edek string) ([]byte, error) {
+func KMSUnwrapDEK(project, edek string) ([]byte, error) {
 	url := os.Getenv("KMS_URL") + "/unwrap-dek"
 	body, _ := json.Marshal(map[string]string{
 		"project": project,
@@ -102,5 +102,9 @@ func KMSUnwrapDEK(project string, edek string) ([]byte, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
 		return nil, err
 	}
-	return base64.StdEncoding.DecodeString(respData.DEK)
+	decoded, err := base64.StdEncoding.DecodeString(respData.DEK)
+	if err != nil {
+		return nil, err
+	}
+	return decoded, nil
 }

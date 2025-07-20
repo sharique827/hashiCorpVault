@@ -2,6 +2,8 @@ package internal
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
 	"os"
@@ -39,4 +41,49 @@ func GenerateRandomKEK() ([]byte, error) {
 	kek := make([]byte, 32) // 256 bits
 	_, err := rand.Read(kek)
 	return kek, err
+}
+
+// FetchKEK retrieves the KEK for a project from Vault.
+func (vc *VaultClient) FetchKEK(project string) ([]byte, error) {
+	ctx := context.Background()
+	secret, err := vc.Client.KVv2("secret").Get(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	kekB64, ok := secret.Data["kek"].(string)
+	if !ok {
+		return nil, err
+	}
+	return base64.StdEncoding.DecodeString(kekB64)
+}
+
+// EncryptWithAESGCM encrypts plaintext with the given key using AES-GCM.
+func EncryptWithAESGCM(key, plaintext []byte) (ciphertext, nonce []byte, err error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, nil, err
+	}
+	nonce = make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, nil, err
+	}
+	ciphertext = gcm.Seal(nil, nonce, plaintext, nil)
+	return ciphertext, nonce, nil
+}
+
+// DecryptWithAESGCM decrypts ciphertext with the given key and nonce using AES-GCM.
+func DecryptWithAESGCM(key, ciphertext, nonce []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	return gcm.Open(nil, nonce, ciphertext, nil)
 }

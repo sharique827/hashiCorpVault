@@ -10,7 +10,7 @@ services:
       - IPC_LOCK
     volumes:
       - /home/sharique/Downloads/vaultdata/config.hcl:/vault/config/config.hcl
-      - /home/sharique/Downloads/vaultdata/file:/vault/file
+    #   - /home/sharique/Downloads/vaultdata/file:/vault/file
     environment:
       VAULT_LOCAL_CONFIG: '{}'
     command: "vault server -config=/vault/config/config.hcl"
