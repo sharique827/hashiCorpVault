@@ -68,13 +68,12 @@ func CreateInvoiceHandler(db *InvoiceDB, mainDB *DB, cache *Cache) http.HandlerF
 			http.Error(w, "Encryption failed", http.StatusInternalServerError)
 			return
 		}
-		// Wrap DEK with Vault Transit
-		edek, err := VaultTransitEncryptDEK(req.Project, dek)
+		// Wrap DEK with KMS
+		edek, err := KMSWrapDEK(req.Project, dek)
 		if err != nil {
 			http.Error(w, "Failed to wrap DEK", http.StatusInternalServerError)
 			return
 		}
-		// Store encryptedData, edek, dataNonce
 		if err := db.InsertInvoice(req.Project, req.InvoiceID, []byte(edek), encryptedData, nil, dataNonce, "v1"); err != nil {
 			http.Error(w, "DB insert failed", http.StatusInternalServerError)
 			return
@@ -118,8 +117,8 @@ func FetchInvoiceHandler(db *InvoiceDB, mainDB *DB, cache *Cache) http.HandlerFu
 			http.Error(w, "Invoice not found", http.StatusNotFound)
 			return
 		}
-		// Unwrap DEK with Vault Transit
-		dek, err := VaultTransitDecryptDEK(req.Project, string(rec.EDEK))
+		// Unwrap DEK with KMS
+		dek, err := KMSUnwrapDEK(req.Project, string(rec.EDEK))
 		if err != nil {
 			http.Error(w, "Failed to unwrap DEK", http.StatusInternalServerError)
 			return

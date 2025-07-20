@@ -50,49 +50,57 @@ func DecryptWithAESGCM(key, ciphertext, nonce []byte) ([]byte, error) {
 	return gcm.Open(nil, nonce, ciphertext, nil)
 }
 
-// Vault Transit API helpers
-func VaultTransitEncryptDEK(project string, dek []byte) (edek string, err error) {
-	vaultAddr := os.Getenv("VAULT_ADDR")
-	vaultToken := os.Getenv("VAULT_TOKEN")
-	url := vaultAddr + "/v1/transit/encrypt/" + project + "-kek"
-	payload := map[string]string{"plaintext": base64.StdEncoding.EncodeToString(dek)}
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
-	req.Header.Set("X-Vault-Token", vaultToken)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+// KMS API helpers
+func KMSCreateKey(project string) error {
+	url := os.Getenv("KMS_URL") + "/create-key"
+	body, _ := json.Marshal(map[string]string{"project": project})
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer resp.Body.Close()
-	var respData struct {
-		Ciphertext string `json:"ciphertext"`
+	if resp.StatusCode != 200 {
+		return io.ErrUnexpectedEOF
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
-		return "", err
-	}
-	return respData.Ciphertext, nil
+	return nil
 }
 
-func VaultTransitDecryptDEK(project string, edek string) ([]byte, error) {
-	vaultAddr := os.Getenv("VAULT_ADDR")
-	vaultToken := os.Getenv("VAULT_TOKEN")
-	url := vaultAddr + "/v1/transit/decrypt/" + project + "-kek"
-	payload := map[string]string{"ciphertext": edek}
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
-	req.Header.Set("X-Vault-Token", vaultToken)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+func KMSWrapDEK(project string, dek []byte) (string, error) {
+	url := os.Getenv("KMS_URL") + "/wrap-dek"
+	body, _ := json.Marshal(map[string]string{
+		"project": project,
+		"dek":     base64.StdEncoding.EncodeToString(dek),
+	})
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var respData struct {
+		EDEK string `json:"edek"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+		return "", err
+	}
+	return respData.EDEK, nil
+}
+
+func KMSUnwrapDEK(project string, edek string) ([]byte, error) {
+	url := os.Getenv("KMS_URL") + "/unwrap-dek"
+	body, _ := json.Marshal(map[string]string{
+		"project": project,
+		"edek":    edek,
+	})
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	var respData struct {
-		Plaintext string `json:"plaintext"`
+		DEK string `json:"dek"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
 		return nil, err
 	}
-	return base64.StdEncoding.DecodeString(respData.Plaintext)
+	return base64.StdEncoding.DecodeString(respData.DEK)
 }
